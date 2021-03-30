@@ -46,8 +46,8 @@
 		compatible = "ilitek, ili9806e", "simple-panel";
 		reg = <0>;
 		backlight = <&backlight>;
-		pinctrl-0 = <&pinctrl_mipi_dsi_en>;
-		reset-gpio = <&gpio1 11 GPIO_ACTIVE_LOW>;
+/*		pinctrl-0 = <&pinctrl_mipi_dsi_en>;*/
+/*		reset-gpio = <&gpio1 11 GPIO_ACTIVE_LOW>;*/
 		dsi-lanes = <2>;		// 2 lanes
 		video-mode = <2>;	/* 0: burst mode
 					 * 1: non-burst mode with sync event
@@ -122,14 +122,14 @@
 			MX8MM_IOMUXC_GPIO1_IO08_GPIO1_IO8	0xc1
 		>;
 	};
-
+/*
 	pinctrl_mipi_dsi_en: mipi_dsi_en {
 		fsl,pins = <
-			MX8MM_IOMUXC_GPIO1_IO11_GPIO1_IO11 	0xc1 /* RST/DSI_EN */
-/*			MX8MM_IOMUXC_GPIO1_IO12_GPIO1_IO12 	0xc1 */ /* FMARK */
+			MX8MM_IOMUXC_GPIO1_IO11_GPIO1_IO11 	0xc1 // RST/DSI_EN 
+			MX8MM_IOMUXC_GPIO1_IO12_GPIO1_IO12 	0xc1 // FMARK 
 		>;
 	};
-
+*/
 	pinctrl_i2c4: i2c4grp {
 		fsl,pins = <
 			MX8MM_IOMUXC_I2C4_SCL_I2C4_SCL			0x400001c3
