@@ -3,7 +3,6 @@
  * Copyright (C) 2017-2018, Bootlin
  */
 
-#include <linux/backlight.h>
 #include <linux/delay.h>
 #include <linux/device.h>
 #include <linux/err.h>
@@ -11,24 +10,27 @@
 #include <linux/fb.h>
 #include <linux/kernel.h>
 #include <linux/module.h>
-
 #include <linux/gpio.h>
+#include <linux/backlight.h>
+#include <linux/media-bus-format.h>
+
 #include <linux/gpio/consumer.h>
 #include <linux/regulator/consumer.h>
-#include <linux/media-bus-format.h>
 
 #include <drm/drm_mipi_dsi.h>
 #include <drm/drm_modes.h>
 #include <drm/drm_panel.h>
 
 #include <video/mipi_display.h>
+#include <video/display_timing.h>
+#include <video/videomode.h>
 
 #define DSI_EN	11
 
 struct ili9806e {
 	struct drm_panel	panel;
 	struct mipi_dsi_device	*dsi;
-
+	struct videomode vm;
 	struct backlight_device *backlight;
 	struct regulator	*power;
 	struct gpio_desc	*reset;
@@ -170,7 +172,7 @@ static const struct ili9806e_instr ili9806e_init[] = {
 	ILI9806E_COMMAND_INSTR(0x32, 0x00),
 	ILI9806E_COMMAND_INSTR(0x33, 0x22),
 	ILI9806E_COMMAND_INSTR(0x34, 0x22),
-//	ILI9806E_COMMAND_INSTR(0x35, 0x22),
+//	ILI9806E_COMMAND_INSTR(0x35, 0x22), 
 	ILI9806E_COMMAND_INSTR(0x36, 0x22),
 	ILI9806E_COMMAND_INSTR(0x37, 0xAA),
 	ILI9806E_COMMAND_INSTR(0x38, 0xBB),
@@ -214,7 +216,6 @@ static int ili9806e_switch_page(struct ili9806e *ctx, u8 page)
 	ret = mipi_dsi_dcs_write_buffer(ctx->dsi, buf, sizeof(buf));
 	if (ret < 0)
 		return ret;
-	usleep_range(1000, 1200);
 
 	return 0;
 }
@@ -228,10 +229,8 @@ static int ili9806e_software_reset(struct ili9806e *ctx)
 	if (ret < 0)
 		return ret;
 
-	msleep(10);
 	return 0;
 }
-
 
 static int ili9806e_send_cmd_data(struct ili9806e *ctx, u8 cmd, u8 data)
 {
@@ -256,12 +255,6 @@ static int ili9806e_init_sequence(struct drm_panel *panel)
 
 	printk("%s: Enter \n", __func__);
 
-	ret = ili9806e_software_reset(ctx);
-	if(ret){
-		dev_err(&ctx->dsi->dev, "failed to reset panel, err=%d\n", ret);
-		return ret;
-	}
-
 	for (i = 0; i < ARRAY_SIZE(ili9806e_init); i++) {
 		const struct ili9806e_instr *instr = &ili9806e_init[i];
 
@@ -281,7 +274,7 @@ static int ili9806e_init_sequence(struct drm_panel *panel)
 
 	ret = ili9806e_send_cmd_data(ctx, MIPI_DCS_SET_TEAR_ON, 0x22);
 	if (ret){
-		dev_err(&ctx->dsi->dev, "failed to panel tear on effect, err=%d\n", ret);
+		printk("%s: failed to panel tear on effect, err=%d\n", __func__, ret);
 		return ret;
 	}
 #if 0
@@ -318,26 +311,28 @@ static int ili9806e_prepare(struct drm_panel *panel)
 	struct ili9806e *ctx = panel_to_ili9806e(panel);
 	int ret;
 	printk("%s: Enter \n", __func__);
-	/* Power the panel */
-	ret = regulator_enable(ctx->power);
-	if (ret)
-		return ret;
 
-	ret = gpio_request(DSI_EN, "dsi-reset");
+	ret = gpio_request(DSI_EN, "DE");	
 	if (ret){
-		printk("+++ Failed to request reset gpio, err=%d\n", ret);
+		printk("Failed to request reset gpio, err=%d\n", ret);
 	}
 
 	gpio_direction_output(DSI_EN, 1);
 
-	/* And reset it */
 	gpiod_set_value(ctx->reset, 0);
-	msleep(20);
-	gpiod_set_value(ctx->reset, 1);
+
+	ret = regulator_enable(ctx->power);
+	if (ret)
+		return ret;
 	msleep(20);
 
+	gpiod_set_value(ctx->reset, 1);
+
+	msleep(120); // tRT max
 	gpio_free(DSI_EN);
+
 	printk("%s: Exit \n", __func__);
+
 	return 0;
 }
 
@@ -349,19 +344,67 @@ static int ili9806e_enable(struct drm_panel *panel)
 
 	printk("%s: Enter\n", __func__);
 
-	ctx->dsi->mode_flags |= MIPI_DSI_MODE_LPM;	
-
 	ret = ili9806e_init_sequence(panel);
 	if (ret < 0) {
 		printk("%s: failed with error =%d\n", __func__, ret);
+		return ret;
 	}
 
-	backlight_enable(ctx->backlight);
+	ret = backlight_enable(ctx->backlight);
+	if (ret){
+		printk("%s: failed to enable backlight, err=%d\n", __func__, ret);
+		return ret;
+	}
 
-	printk("%s: end\n", __func__);
-
+	printk("%s: Exit\n", __func__);
 	return 0;
 }
+
+static int ili9806e_bl_get_brightness(struct backlight_device *bl)
+{
+	struct mipi_dsi_device *dsi = bl_get_data(bl);
+	struct device *dev = &dsi->dev;
+	u16 brightness;
+	int ret;
+
+	printk("Enter func %s...\n",__func__);
+
+	dsi->mode_flags &= ~MIPI_DSI_MODE_LPM;
+
+	ret = mipi_dsi_dcs_get_display_brightness(dsi, &brightness);
+	if (ret < 0)
+		return ret;
+
+	bl->props.brightness = brightness;
+
+	printk("Exit %s normally.\n",__func__);	//new add
+
+	return brightness & 0xff;
+}
+
+static int ili9806e_bl_update_status(struct backlight_device *bl)
+{
+	struct mipi_dsi_device *dsi = bl_get_data(bl);
+	struct device *dev = &dsi->dev;
+	int ret = 0;
+
+	printk("%s: Enter\n", __func__);
+	printk("New brightness: %d\n", bl->props.brightness);
+
+	dsi->mode_flags &= ~MIPI_DSI_MODE_LPM;
+
+	ret = mipi_dsi_dcs_set_display_brightness(dsi, bl->props.brightness);
+	if (ret < 0)
+		return ret;
+
+	printk("%s: Exit\n", __func__);
+	return 0;
+}
+
+static const struct backlight_ops ili9806e_bl_ops = {
+	.update_status = ili9806e_bl_update_status,
+	.get_brightness = ili9806e_bl_get_brightness,
+};
 
 static int ili9806e_disable(struct drm_panel *panel)
 {
@@ -384,17 +427,20 @@ static int ili9806e_unprepare(struct drm_panel *panel)
 	return 0;
 }
 
-static const struct drm_display_mode ilitek_default_mode = {
-	.clock		= 35714, //28ns ILI9806E-ILITEK p.318
-	.hdisplay	= 480,
-	.hsync_start	= 480 + 10,
-	.hsync_end	= 480 + 10 + 20,
-	.htotal		= 480 + 10 + 20 + 30,
-	.vdisplay	= 800,
-	.vsync_start	= 800 + 10,
-	.vsync_end	= 800 + 10 + 10,
-	.vtotal		= 800 + 10 + 10 + 20,
-	.vrefresh	= 60,
+static const struct display_timing ili9806e_default_timing = {
+	.pixelclock = { 29534400, 29534400, 29534400 },//Hz : htotal*vtotal*60 = 29 534 400 Hz
+	.hactive = { 480, 480, 480 },
+	.hfront_porch = { 50, 50, 50 },
+	.hsync_len = { 10, 10, 10 },
+	.hback_porch = { 46, 46, 46 },
+	.vactive = { 800, 800, 800 },
+	.vfront_porch = { 15, 15, 15 },
+	.vsync_len = { 10, 10, 10 },
+	.vback_porch = { 15, 15, 15 },
+	.flags = DISPLAY_FLAGS_HSYNC_LOW |
+		 DISPLAY_FLAGS_VSYNC_LOW |
+		 DISPLAY_FLAGS_DE_HIGH |
+		 DISPLAY_FLAGS_PIXDATA_POSEDGE, //see p.184
 };
 
 static int ili9806e_get_modes(struct drm_panel *panel)
@@ -406,24 +452,24 @@ static int ili9806e_get_modes(struct drm_panel *panel)
 	int ret;
 
 	printk("%s: Enter\n", __func__);
-	mode = drm_mode_duplicate(panel->drm, &ilitek_default_mode);
+
+	mode = drm_mode_create(connector->dev);
 	if (!mode) {
-		dev_err(&ctx->dsi->dev, "failed to add mode %ux%ux@%u\n",
-			ilitek_default_mode.hdisplay,
-			ilitek_default_mode.vdisplay,
-			ilitek_default_mode.vrefresh);
-		return -ENOMEM;
+		printk("Failed to create display mode!\n");
+		return 0;
 	}
 
-	drm_mode_set_name(mode);
+	drm_display_mode_from_videomode(&ctx->vm, mode);
+
+	mode->width_mm = 52;
+	mode->height_mm = 86;
+	connector->display_info.bpc = 8;
+	connector->display_info.width_mm = 52;
+	connector->display_info.height_mm = 86;
 
 	mode->type = DRM_MODE_TYPE_DRIVER | DRM_MODE_TYPE_PREFERRED;
 
 	*bus_flags |= DRM_BUS_FLAG_DE_LOW | DRM_BUS_FLAG_PIXDATA_NEGEDGE;
-
-	connector->display_info.width_mm = 52;
-	connector->display_info.height_mm = 86;
-	connector->display_info.bpc = 8;
 
 	ret = drm_display_info_set_bus_formats(&(connector->display_info),
 			ilitek_bus_formats, ARRAY_SIZE(ilitek_bus_formats));
@@ -445,8 +491,10 @@ static const struct drm_panel_funcs ili9806e_funcs = {
 
 static int ili9806e_dsi_probe(struct mipi_dsi_device *dsi)
 {
+	struct device *dev = &dsi->dev;
 	struct device_node *np;
 	struct ili9806e *ctx;
+	struct backlight_properties bl_props;
 	int ret;
 
 	printk("%s: Enter\n", __func__);
@@ -475,6 +523,8 @@ static int ili9806e_dsi_probe(struct mipi_dsi_device *dsi)
 	}
 */
 
+	videomode_from_timing(&ili9806e_default_timing, &ctx->vm);
+/*
 	np = of_parse_phandle(dsi->dev.of_node, "backlight", 0);
 	if (np) {
 		ctx->backlight = of_find_backlight_by_node(np);
@@ -483,11 +533,24 @@ static int ili9806e_dsi_probe(struct mipi_dsi_device *dsi)
 		if (!ctx->backlight)
 			return -EPROBE_DEFER;
 	}
+*/
+	memset(&bl_props, 0, sizeof(bl_props));
+	bl_props.type = BACKLIGHT_RAW;
+	bl_props.brightness = 255;
+	bl_props.max_brightness = 255;
+
+	ctx->backlight = devm_backlight_device_register(
+				dev, dev_name(dev),
+				dev, dsi,
+				&ili9806e_bl_ops, &bl_props);
+	if (IS_ERR(ctx->backlight)) {
+		dev_err(&dsi->dev, "Failed to register backlight (%d)\n", ret);
+		return ret;
+	}
 
 	drm_panel_init(&ctx->panel);
 	ctx->panel.dev = &dsi->dev;
 	ctx->panel.funcs = &ili9806e_funcs;
-
 
 	ret = drm_panel_add(&ctx->panel);
 	if (ret < 0)
