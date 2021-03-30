@@ -15,6 +15,7 @@
 #include <linux/gpio.h>
 #include <linux/gpio/consumer.h>
 #include <linux/regulator/consumer.h>
+#include <linux/media-bus-format.h>
 
 #include <drm/drm_mipi_dsi.h>
 #include <drm/drm_modes.h>
@@ -36,6 +37,10 @@ struct ili9806e {
 enum ili9806e_op {
 	ILI9806E_SWITCH_PAGE,
 	ILI9806E_COMMAND,
+};
+
+static const u32 ilitek_bus_formats[] = {
+	MEDIA_BUS_FMT_RGB888_1X24,
 };
 
 struct ili9806e_instr {
@@ -121,7 +126,6 @@ static const struct ili9806e_instr ili9806e_init[] = {
 	ILI9806E_COMMAND_INSTR(0xCD, 0x11), // Gamma 247     8
 	ILI9806E_COMMAND_INSTR(0xCE, 0x0C), // Gamma 251     4
 	ILI9806E_COMMAND_INSTR(0xCF, 0x00), // Gamma 255     0
-/*
 	ILI9806E_SWITCH_PAGE_INSTR(0x06),     // Change to Page 6
 	ILI9806E_COMMAND_INSTR(0x00, 0x20),
 	ILI9806E_COMMAND_INSTR(0x01, 0x04),
@@ -166,7 +170,7 @@ static const struct ili9806e_instr ili9806e_init[] = {
 	ILI9806E_COMMAND_INSTR(0x32, 0x00),
 	ILI9806E_COMMAND_INSTR(0x33, 0x22),
 	ILI9806E_COMMAND_INSTR(0x34, 0x22),
-	ILI9806E_COMMAND_INSTR(0x35, 0x22),
+//	ILI9806E_COMMAND_INSTR(0x35, 0x22),
 	ILI9806E_COMMAND_INSTR(0x36, 0x22),
 	ILI9806E_COMMAND_INSTR(0x37, 0xAA),
 	ILI9806E_COMMAND_INSTR(0x38, 0xBB),
@@ -178,7 +182,6 @@ static const struct ili9806e_instr ili9806e_init[] = {
 	ILI9806E_COMMAND_INSTR(0x3E, 0x22),
 	ILI9806E_COMMAND_INSTR(0x3F, 0x22),
 	ILI9806E_COMMAND_INSTR(0x40, 0x22),
-*/
 	ILI9806E_SWITCH_PAGE_INSTR(0x07),     // Change to Page 7
 	ILI9806E_COMMAND_INSTR(0x17, 0x22),     // Sleep-Out
 	ILI9806E_COMMAND_INSTR(0x02, 0x77),     // Display On
@@ -249,6 +252,7 @@ static int ili9806e_init_sequence(struct drm_panel *panel)
 	int ret;
 	u8 id1_val;
 	u8 id1 = 0xda;
+	u16 brigthness;
 
 	printk("%s: Enter \n", __func__);
 
@@ -275,23 +279,36 @@ static int ili9806e_init_sequence(struct drm_panel *panel)
 		}
 	}
 
+	ret = ili9806e_send_cmd_data(ctx, MIPI_DCS_SET_TEAR_ON, 0x22);
+	if (ret){
+		dev_err(&ctx->dsi->dev, "failed to panel tear on effect, err=%d\n", ret);
+		return ret;
+	}
+#if 0
 	//Set Maximum Return Packet Size
 	ret = ili9806e_switch_page(ctx, 0);
-	if(ret)
+	if (ret)
 		return ret;
 
 	ret =  mipi_dsi_set_maximum_return_packet_size(ctx->dsi, 1);
-	if(ret)
+	if (ret)
 		return ret;
+
+	printk("%s: Read brigthness", __func__);
+	ret = mipi_dsi_dcs_get_display_brightness(ctx->dsi, brigthness);
+	if (ret)
+		return ret;
+
+	printk("%s: brigthness = %d", __func__, brigthness);
 
 	msleep(20);
 
 	ret = mipi_dsi_dcs_read(ctx->dsi, id1, &id1_val, sizeof(u8));
-	if(ret)
+	if (ret)
 		return ret;
 
 	printk("%s: Read ID1 = %02x, err=%d\n", __func__, id1_val, ret);
-
+#endif
 	printk("%s: Exit \n", __func__);
 	return 0;
 }
@@ -369,17 +386,15 @@ static int ili9806e_unprepare(struct drm_panel *panel)
 
 static const struct drm_display_mode ilitek_default_mode = {
 	.clock		= 35714, //28ns ILI9806E-ILITEK p.318
-	.vrefresh	= 60,
-
 	.hdisplay	= 480,
 	.hsync_start	= 480 + 10,
 	.hsync_end	= 480 + 10 + 20,
 	.htotal		= 480 + 10 + 20 + 30,
-
 	.vdisplay	= 800,
 	.vsync_start	= 800 + 10,
 	.vsync_end	= 800 + 10 + 10,
 	.vtotal		= 800 + 10 + 10 + 20,
+	.vrefresh	= 60,
 };
 
 static int ili9806e_get_modes(struct drm_panel *panel)
@@ -387,6 +402,8 @@ static int ili9806e_get_modes(struct drm_panel *panel)
 	struct drm_connector *connector = panel->connector;
 	struct ili9806e *ctx = panel_to_ili9806e(panel);
 	struct drm_display_mode *mode;
+	u32 *bus_flags = &panel->connector->display_info.bus_flags;
+	int ret;
 
 	printk("%s: Enter\n", __func__);
 	mode = drm_mode_duplicate(panel->drm, &ilitek_default_mode);
@@ -401,11 +418,19 @@ static int ili9806e_get_modes(struct drm_panel *panel)
 	drm_mode_set_name(mode);
 
 	mode->type = DRM_MODE_TYPE_DRIVER | DRM_MODE_TYPE_PREFERRED;
+
+	*bus_flags |= DRM_BUS_FLAG_DE_LOW | DRM_BUS_FLAG_PIXDATA_NEGEDGE;
+
+	connector->display_info.width_mm = 52;
+	connector->display_info.height_mm = 86;
+	connector->display_info.bpc = 8;
+
+	ret = drm_display_info_set_bus_formats(&(connector->display_info),
+			ilitek_bus_formats, ARRAY_SIZE(ilitek_bus_formats));
+	if(ret)
+		return ret;
+
 	drm_mode_probed_add(connector, mode);
-
-	panel->connector->display_info.width_mm = 52;
-	panel->connector->display_info.height_mm = 86;
-
 	printk("%s: Exit \n", __func__);
 	return 0;
 }
