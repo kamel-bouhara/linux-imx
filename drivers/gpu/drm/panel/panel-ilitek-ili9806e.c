@@ -453,12 +453,14 @@ static int ili9806e_dsi_probe(struct mipi_dsi_device *dsi)
 	ctx = devm_kzalloc(&dsi->dev, sizeof(*ctx), GFP_KERNEL);
 	if (!ctx)
 		return -ENOMEM;
+
 	mipi_dsi_set_drvdata(dsi, ctx);
+
 	ctx->dsi = dsi;
 
-	drm_panel_init(&ctx->panel);
-	ctx->panel.dev = &dsi->dev;
-	ctx->panel.funcs = &ili9806e_funcs;
+    	dsi->mode_flags = MIPI_DSI_MODE_VIDEO | MIPI_DSI_MODE_VIDEO_SYNC_PULSE;
+	dsi->format = MIPI_DSI_FMT_RGB888;
+	dsi->lanes = 2;
 
 	ctx->power = devm_regulator_get(&dsi->dev, "power");
 	if (IS_ERR(ctx->power)) {
@@ -482,13 +484,14 @@ static int ili9806e_dsi_probe(struct mipi_dsi_device *dsi)
 			return -EPROBE_DEFER;
 	}
 
+	drm_panel_init(&ctx->panel);
+	ctx->panel.dev = &dsi->dev;
+	ctx->panel.funcs = &ili9806e_funcs;
+
+
 	ret = drm_panel_add(&ctx->panel);
 	if (ret < 0)
 		return ret;
-
-    	dsi->mode_flags = MIPI_DSI_MODE_VIDEO;
-	dsi->format = MIPI_DSI_FMT_RGB888;
-	dsi->lanes = 2;
 
 	printk("%s: Exit\n", __func__);
 	return mipi_dsi_attach(dsi);
