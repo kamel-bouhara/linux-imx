@@ -469,7 +469,7 @@ static int ili9806e_get_modes(struct drm_panel *panel)
 
 	mode->type = DRM_MODE_TYPE_DRIVER | DRM_MODE_TYPE_PREFERRED;
 
-	*bus_flags |= DRM_BUS_FLAG_DE_LOW | DRM_BUS_FLAG_PIXDATA_NEGEDGE;
+	*bus_flags |= DRM_BUS_FLAG_DE_HIGH | DRM_BUS_FLAG_PIXDATA_NEGEDGE;
 
 	ret = drm_display_info_set_bus_formats(&(connector->display_info),
 			ilitek_bus_formats, ARRAY_SIZE(ilitek_bus_formats));
